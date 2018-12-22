@@ -3,7 +3,7 @@ import itertools
 from util.image_pool import ImagePool
 from .base_model import BaseModel
 from . import networks
-
+import torchvision.transforms.functional as TF
 
 class CycleGANModel(BaseModel):
     def name(self):
@@ -14,9 +14,10 @@ class CycleGANModel(BaseModel):
         # default CycleGAN did not use dropout
         parser.set_defaults(no_dropout=True)
         if is_train:
-            parser.add_argument('--lambda_A', type=float, default=10.0, help='weight for cycle loss (A -> B -> A)')
-            parser.add_argument('--lambda_B', type=float, default=10.0,
-                                help='weight for cycle loss (B -> A -> B)')
+            parser.add_argument('--lambda_A', type=float, default=3.0, 
+                                help='a multiplier for relative weighting for cycle loss (A -> B -> A)')
+            parser.add_argument('--lambda_B', type=float, default=3.0,
+                                help='a multiplier for relative weighting for cycle loss (B -> A -> B)')
             parser.add_argument('--lambda_identity', type=float, default=0.5, help='use identity mapping. Setting lambda_identity other than 0 has an effect of scaling the weight of the identity mapping loss. For example, if the weight of the identity loss should be 10 times smaller than the weight of the reconstruction loss, please set lambda_identity = 0.1')
 
         return parser
@@ -25,7 +26,7 @@ class CycleGANModel(BaseModel):
         BaseModel.initialize(self, opt)
 
         # specify the training losses you want to print out. The program will call base_model.get_current_losses
-        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'idt_B']
+        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'mirror_A', 'idt_A', 'D_B', 'G_B', 'cycle_B', 'mirror_B', 'idt_B']
         # specify the images you want to save/display. The program will call base_model.get_current_visuals
         visual_names_A = ['real_A', 'fake_B', 'rec_A']
         visual_names_B = ['real_B', 'fake_A', 'rec_B']
@@ -62,6 +63,7 @@ class CycleGANModel(BaseModel):
             # define loss functions
             self.criterionGAN = networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
             self.criterionCycle = torch.nn.L1Loss()
+            self.criterionMirror = torch.nn.L1Loss()
             self.criterionIdt = torch.nn.L1Loss()
             # initialize optimizers
             self.optimizer_G = torch.optim.Adam(itertools.chain(self.netG_A.parameters(), self.netG_B.parameters()),
@@ -77,12 +79,21 @@ class CycleGANModel(BaseModel):
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
+        
+    # Inefficient (Create a flipped image when image is loaded from dataloader). Left it for easier understanding
+    def flip(self, img_tensor):
+        return TF.to_tensor(TF.hflip(TF.to_pil_image(img_tensor.squeeze().cpu()))).unsqueeze(0).cuda()
 
     def forward(self):
+        self.flip_real_A = self.flip(self.real_A)
         self.fake_B = self.netG_A(self.real_A)
+        self.fake_flip_B = self.netG_A(self.flip_real_A)
+        
         self.rec_A = self.netG_B(self.fake_B)
 
+        self.flip_real_B = self.flip(self.real_B)
         self.fake_A = self.netG_B(self.real_B)
+        self.fake_flip_A = self.netG_B(self.flip_real_B)
         self.rec_B = self.netG_A(self.fake_A)
 
     def backward_D_basic(self, netD, real, fake):
@@ -126,12 +137,16 @@ class CycleGANModel(BaseModel):
         self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
         # GAN loss D_B(G_B(B))
         self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
-        # Forward cycle loss
-        self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
+        # Forward cycle loss (5 is a hardcoded hyper parameter for now for max multiplier value)
+        self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * min(1 / (self.loss_G_A * lambda_A), 5)
         # Backward cycle loss
-        self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
+        self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * min(1 / (self.loss_G_B * lambda_B), 5)
+        # mirror loss
+        self.loss_mirror_A = self.criterionMirror(self.fake_flip_B, self.flip(self.fake_B))
+        self.loss_mirror_B = self.criterionMirror(self.fake_flip_A, self.flip(self.fake_A))
         # combined loss
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+        self.loss_G = (self.loss_mirror_A + self.loss_mirror_B + self.loss_G_A + self.loss_G_B +
+                       self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B)
         self.loss_G.backward()
 
     def optimize_parameters(self):
