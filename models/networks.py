@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
+from .msssim import MSSSIM
 
 ###############################################################################
 # Helper Functions
@@ -99,6 +100,8 @@ def define_D(input_nc, ndf, netD,
         net = NLayerDiscriminator(input_nc, ndf, n_layers_D, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     elif netD == 'pixel':
         net = PixelDiscriminator(input_nc, ndf, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
+    elif netD == 'wgan':
+        net = WGANDiscriminator()
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % net)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -134,7 +137,16 @@ class GANLoss(nn.Module):
         target_tensor = self.get_target_tensor(input, target_is_real)
         return self.loss(input, target_tensor)
 
-
+# Defines the Similarity loss which is a combination of L1 and MSSSIM.
+class CombinedSimilarityLoss(nn.Module):
+    def __init__(self, lambda_L1=0.7, lambda_MS=0.3):
+        super(CombinedSimilarityLoss, self).__init__()
+        self.lambda_L1 = lambda_L1
+        self.lambda_MS = lambda_MS
+        
+    def forward(self, img1, img2):
+        return (self.lambda_L1 * torch.nn.L1Loss()(img1, img2)) + (self.lambda_MS * MSSSIM()(img1, img2)) 
+        
 # Defines the generator that consists of Resnet blocks between a few
 # downsampling/upsampling operations.
 # Code and idea originally from Justin Johnson's architecture.
@@ -356,6 +368,57 @@ class NLayerDiscriminator(nn.Module):
 
     def forward(self, input):
         return self.model(input)
+
+class WGANDiscriminator(nn.Module):
+    def __init__(self, input_dim=3, output_dim=1, input_size=128):
+        super(WGANDiscriminator, self).__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.input_size = input_size
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(self.input_dim, 64, 4, 2, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(64, 128, 4, 2, 1),
+            nn.LeakyReLU(0.2),
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(128 * (self.input_size // 4) * (self.input_size // 4), 1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, self.output_dim),
+            # nn.Sigmoid(),
+        )
+
+    def forward(self, input):
+        x = self.conv(input)
+        x = x.view(-1, 128 * (self.input_size // 4) * (self.input_size // 4))
+        x = self.fc(x)
+
+        return x
+
+def calc_gradient_penalty(netD, real_data, fake_data):
+    # print "real_data: ", real_data.size(), fake_data.size()
+    BATCH_SIZE = 1
+    alpha = torch.rand(BATCH_SIZE, 1)
+    alpha = alpha.expand(BATCH_SIZE, real_data.nelement()/BATCH_SIZE).contiguous().view(BATCH_SIZE, 3, 32, 32)
+    alpha = alpha.cuda(gpu) if use_cuda else alpha
+
+    interpolates = alpha * real_data + ((1 - alpha) * fake_data)
+
+    if use_cuda:
+        interpolates = interpolates.cuda(gpu)
+    interpolates = autograd.Variable(interpolates, requires_grad=True)
+
+    disc_interpolates = netD(interpolates)
+
+    gradients = autograd.grad(outputs=disc_interpolates, inputs=interpolates,
+                              grad_outputs=torch.ones(disc_interpolates.size()).cuda(gpu) if use_cuda else torch.ones(
+                                  disc_interpolates.size()),
+                              create_graph=True, retain_graph=True, only_inputs=True)[0]
+    gradients = gradients.view(gradients.size(0), -1)
+
+    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * LAMBDA
+    return gradient_penalty
 
 
 class PixelDiscriminator(nn.Module):

@@ -62,6 +62,7 @@ class CycleGANModel(BaseModel):
             self.fake_B_pool = ImagePool(opt.pool_size)
             # define loss functions
             self.criterionGAN = networks.GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
+            # self.criterionCycle = networks.CombinedSimilarityLoss()
             self.criterionCycle = torch.nn.L1Loss()
             self.criterionMirror = torch.nn.L1Loss()
             self.criterionIdt = torch.nn.L1Loss()
