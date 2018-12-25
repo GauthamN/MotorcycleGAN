@@ -369,6 +369,7 @@ class NLayerDiscriminator(nn.Module):
     def forward(self, input):
         return self.model(input)
 
+# Source: https://github.com/znxlwm/pytorch-generative-model-collections/blob/master/WGAN_GP.py
 class WGANDiscriminator(nn.Module):
     def __init__(self, input_dim=3, output_dim=1, input_size=128):
         super(WGANDiscriminator, self).__init__()
@@ -396,6 +397,7 @@ class WGANDiscriminator(nn.Module):
 
         return x
 
+# Source: https://github.com/caogang/wgan-gp/blob/master/gan_mnist.py
 def calc_gradient_penalty(netD, real_data, fake_data):
     # print "real_data: ", real_data.size(), fake_data.size()
     BATCH_SIZE = 1
