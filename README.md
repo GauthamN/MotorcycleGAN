@@ -1,9 +1,10 @@
 # Motorcycle GAN
 
-Based on CycleGAN codebase by [Jun-Yan Zhu](https://github.com/junyanz) and [Taesung Park](https://github.com/taesung) ([Link to original repo](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix)), and supported by [Tongzhou Wang](https://ssnl.github.io/).
+Based on CycleGAN codebase by [Jun-Yan Zhu](https://github.com/junyanz) and [Taesung Park](https://github.com/taesung) ([Link to original repo](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix)).
+
+More project information soon.
 
 You may find useful information in [training/test tips](docs/tips.md) and [frequently asked questions](docs/qa.md).
-
 
 ## Prerequisites
 - Linux or macOS
